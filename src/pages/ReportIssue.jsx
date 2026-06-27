@@ -48,14 +48,20 @@ export default function ReportIssue({ addIssue }) {
     if (!form.category) setForm(prev => ({ ...prev, category }));
     setMlLoading(false);
   };
-
-  const handleImageChange = (e) => {
+const handleImageChange = async (e) => {
     const file = e.target.files[0];
     if (file) {
-      setForm({ ...form, image: file });
-      setImagePreview(URL.createObjectURL(file));
+      const imageCompression = (await import('browser-image-compression')).default;
+      const compressed = await imageCompression(file, {
+        maxSizeMB: 0.3,
+        maxWidthOrHeight: 800,
+        useWebWorker: true,
+      });
+      setForm({ ...form, image: compressed });
+      setImagePreview(URL.createObjectURL(compressed));
     }
   };
+  
 
   const handleSubmit = async () => {
     if (!form.title || !form.category || !form.location) {
