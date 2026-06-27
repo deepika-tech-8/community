@@ -1,9 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
 import { Upload, CheckCircle, Sparkles, Brain } from 'lucide-react';
 import { categories } from '../data/issues';
 import { analyzeIssue } from '../utils/aiAnalysis';
-import { trainModel, predictSeverity } from '../utils/mlModel';
+import { predictSeverity, predictCategory } from '../utils/mlModel';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { storage } from '../firebase';
 
 function LocationPicker({ onSelect }) {
   useMapEvents({
@@ -25,11 +27,8 @@ export default function ReportIssue({ addIssue }) {
   const [mlLoading, setMlLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [mlResult, setMlResult] = useState(null);
-  const [modelReady, setModelReady] = useState(false);
-
-  useEffect(() => {
-    trainModel().then(() => setModelReady(true));
-  }, []);
+  const [imagePreview, setImagePreview] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState('');
 
   const handleAnalyze = async () => {
     if (!form.title) { alert('Enter a title first!'); return; }
@@ -40,12 +39,22 @@ export default function ReportIssue({ addIssue }) {
     setAnalyzing(false);
   };
 
-  const handleMLPredict = async () => {
+  const handleMLPredict = () => {
     if (!form.title) { alert('Enter a title first!'); return; }
     setMlLoading(true);
-    const result = await predictSeverity(form.title + ' ' + form.description);
-    setMlResult(result);
+    const result = predictSeverity(form.title + ' ' + form.description);
+    const category = predictCategory(form.title + ' ' + form.description);
+    setMlResult({ ...result, category });
+    if (!form.category) setForm(prev => ({ ...prev, category }));
     setMlLoading(false);
+  };
+
+  const handleImageChange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      setForm({ ...form, image: file });
+      setImagePreview(URL.createObjectURL(file));
+    }
   };
 
   const handleSubmit = async () => {
@@ -54,6 +63,20 @@ export default function ReportIssue({ addIssue }) {
       return;
     }
     setLoading(true);
+
+    let imageUrl = '';
+    if (form.image) {
+      try {
+        setUploadProgress('Uploading image...');
+        const imageRef = ref(storage, `issues/${Date.now()}_${form.image.name}`);
+        await uploadBytes(imageRef, form.image);
+        imageUrl = await getDownloadURL(imageRef);
+        setUploadProgress('Image uploaded! ✅');
+      } catch (err) {
+        console.error('Image upload failed:', err);
+      }
+    }
+
     await addIssue({
       title: form.title,
       category: form.category,
@@ -64,7 +87,9 @@ export default function ReportIssue({ addIssue }) {
       suggestedAction: aiResult?.suggestedAction || '',
       reporter: 'Anonymous',
       coords: coords || [13.0827, 80.2707],
+      imageUrl,
     });
+
     setLoading(false);
     setSubmitted(true);
   };
@@ -82,12 +107,12 @@ export default function ReportIssue({ addIssue }) {
         <div className="bg-white rounded-2xl p-10 text-center shadow-lg max-w-md w-full">
           <CheckCircle className="text-green-500 mx-auto mb-4" size={64} />
           <h2 className="text-2xl font-bold text-gray-800 mb-2">Issue Reported! 🎉</h2>
-          <p className="text-gray-600 mb-6">Saved to Firebase and visible on the live map!</p>
+          <p className="text-gray-600 mb-6">Saved to Firebase with image and visible on live map!</p>
           {(aiResult || mlResult) && (
             <div className="bg-gray-50 rounded-xl p-4 mb-6 text-left">
               <p className="text-sm font-semibold text-gray-700 mb-2">Analysis Summary:</p>
-              {aiResult && <p className="text-sm text-gray-600">🤖 Gemini: {aiResult.severity} severity ({aiResult.severityScore}/10)</p>}
-              {mlResult && <p className="text-sm text-gray-600">🧠 ML Model: {mlResult.severity} severity ({mlResult.severityScore}/10)</p>}
+              {aiResult && <p className="text-sm text-gray-600">🤖 Gemini: {aiResult.severity} ({aiResult.severityScore}/10)</p>}
+              {mlResult && <p className="text-sm text-gray-600">🧠 ML: {mlResult.severity} ({mlResult.severityScore}/10)</p>}
             </div>
           )}
           <button
@@ -97,6 +122,8 @@ export default function ReportIssue({ addIssue }) {
               setAiResult(null);
               setMlResult(null);
               setCoords(null);
+              setImagePreview(null);
+              setUploadProgress('');
             }}
             className="bg-green-600 text-white font-bold px-8 py-3 rounded-full hover:bg-green-700 transition"
           >
@@ -111,11 +138,7 @@ export default function ReportIssue({ addIssue }) {
     <div className="min-h-screen bg-gray-50 py-10 px-4">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold text-gray-800 mb-2">Report an Issue 📝</h1>
-        <p className="text-gray-600 mb-8">
-          Dual AI Analysis — Gemini API + Local ML Model!
-          {!modelReady && <span className="text-yellow-500 ml-2 text-sm">⏳ Training ML model...</span>}
-          {modelReady && <span className="text-green-500 ml-2 text-sm">✅ ML model ready!</span>}
-        </p>
+        <p className="text-gray-600 mb-8">Dual AI Analysis + Image Upload + Map Location!</p>
 
         <div className="bg-white rounded-2xl shadow-sm p-8 flex flex-col gap-6">
 
@@ -155,7 +178,7 @@ export default function ReportIssue({ addIssue }) {
             </button>
             <button
               onClick={handleMLPredict}
-              disabled={mlLoading || !modelReady}
+              disabled={mlLoading}
               className="flex items-center justify-center gap-2 bg-blue-600 text-white font-bold py-3 rounded-xl hover:bg-blue-700 transition disabled:opacity-50 text-sm"
             >
               <Brain size={16} />
@@ -163,30 +186,26 @@ export default function ReportIssue({ addIssue }) {
             </button>
           </div>
 
-          {/* Results Side by Side */}
+          {/* Results */}
           {(aiResult || mlResult) && (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {aiResult && (
                 <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
                   <p className="text-sm font-semibold text-purple-700 mb-2">🤖 Gemini AI</p>
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${severityColor[aiResult.severity]}`}>
-                      {aiResult.severity} ({aiResult.severityScore}/10)
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-600">{aiResult.reason}</p>
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${severityColor[aiResult.severity]}`}>
+                    {aiResult.severity} ({aiResult.severityScore}/10)
+                  </span>
+                  <p className="text-xs text-gray-600 mt-2">{aiResult.reason}</p>
                   <p className="text-xs text-gray-500 mt-1">💡 {aiResult.suggestedAction}</p>
                 </div>
               )}
               {mlResult && (
                 <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
                   <p className="text-sm font-semibold text-blue-700 mb-2">🧠 ML Model</p>
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${severityColor[mlResult.severity]}`}>
-                      {mlResult.severity} ({mlResult.severityScore}/10)
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-600">Local TensorFlow.js model trained on community issue patterns.</p>
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${severityColor[mlResult.severity]}`}>
+                    {mlResult.severity} ({mlResult.severityScore}/10)
+                  </span>
+                  <p className="text-xs text-gray-600 mt-2">Category: {mlResult.category}</p>
                 </div>
               )}
             </div>
@@ -243,14 +262,20 @@ export default function ReportIssue({ addIssue }) {
 
           {/* Image Upload */}
           <div>
-            <label className="block text-sm font-semibold text-gray-700 mb-2">Upload Image</label>
-            <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl py-8 cursor-pointer hover:border-green-400 transition">
-              <Upload className="text-gray-400 mb-2" size={32} />
-              <span className="text-gray-500 text-sm">Click to upload photo</span>
-              <input type="file" accept="image/*" className="hidden"
-                onChange={e => setForm({ ...form, image: e.target.files[0] })} />
-              {form.image && <span className="text-green-600 text-sm mt-2">✅ {form.image.name}</span>}
+            <label className="block text-sm font-semibold text-gray-700 mb-2">Upload Image 📸</label>
+            <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl py-6 cursor-pointer hover:border-green-400 transition">
+              {imagePreview ? (
+                <img src={imagePreview} alt="Preview" className="w-full max-h-48 object-cover rounded-lg" />
+              ) : (
+                <>
+                  <Upload className="text-gray-400 mb-2" size={32} />
+                  <span className="text-gray-500 text-sm">Click to upload photo of the issue</span>
+                  <span className="text-gray-400 text-xs mt-1">Saved to Firebase Storage</span>
+                </>
+              )}
+              <input type="file" accept="image/*" className="hidden" onChange={handleImageChange} />
             </label>
+            {uploadProgress && <p className="text-sm text-green-600 mt-1">{uploadProgress}</p>}
           </div>
 
           {/* Submit */}
@@ -259,7 +284,7 @@ export default function ReportIssue({ addIssue }) {
             disabled={loading}
             className="bg-green-600 text-white font-bold py-4 rounded-xl hover:bg-green-700 transition disabled:opacity-50"
           >
-            {loading ? 'Saving to Firebase...' : 'Submit Issue 🚀'}
+            {loading ? uploadProgress || 'Saving...' : 'Submit Issue 🚀'}
           </button>
         </div>
       </div>

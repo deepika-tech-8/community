@@ -1,4 +1,4 @@
-const apiKey = import.meta.env.VITE_GCP_API_KEY;
+const GEMINI_API_KEY = "AQ.Ab8RN6Ld1oLR8UC1K-OBdy8Vd_AR_vGaugdRDyqZ7uDRVn6m0Q";
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 export async function analyzeIssue(title, description) {
